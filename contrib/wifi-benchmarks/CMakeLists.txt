@@ -1,0 +1,20 @@
+build_lib(
+  LIBNAME wifi-benchmarks
+  SOURCE_FILES
+    helper/wifi-benchmark-helper.cc
+    model/wifi-literature-reference.cc
+  HEADER_FILES
+    helper/wifi-benchmark-helper.h
+    model/wifi-literature-reference.h
+  LIBRARIES_TO_LINK
+    ${libwifi}
+    ${libinternet}
+    ${libapplications}
+    ${libmobility}
+    ${libspectrum}
+    ${libpropagation}
+    ${libenergy}
+    ${libinternet-apps}
+  TEST_SOURCES
+    test/wifi-benchmarks-test-suite.cc
+)

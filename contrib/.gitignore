@@ -3,3 +3,7 @@
 
 # Include specific files that should be tracked by Git
 !.gitignore
+
+# tracked contrib module: Wi-Fi 6/7/8 benchmark suite
+!wifi-benchmarks/
+!wifi-benchmarks/**
