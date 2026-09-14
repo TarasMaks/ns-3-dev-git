@@ -82,6 +82,32 @@ available in ns-3 and emulate the simplest forms of the candidate features:
 | `wifi-bench-roaming` | Station moving between two bridged APs: loss ratio and maximum reception gap with missed-beacon triggered vs ideal (forced) re-association | Mobility loss objective (`ieee80211bn-par`); 802.11r/k/v not modeled | INFO |
 | `wifi-bench-mlo-reliability` | Hidden jammer on one link: deadline miss ratio, loss (with a queue delay budget), latency and retransmissions for SLD on the jammed link, SLD on the clean link and MLO | Multi-link reliability baseline (`galati2024`, `reshef2022`) | AT_MOST (MLO not worse than the jammed SLD) |
 
+## Headline results (full profile, ns-3 3-dev, optimized build)
+
+The complete tables of a full-profile run are in `doc/sample-results.md`. Highlights:
+
+| Benchmark | Result | Reference |
+|---|---|---|
+| PHY rates (Wi-Fi 6/7) | All 1152 HE and 1680 EHT MCS/width/GI/NSS rates of ns-3 match the formula of the standard (max difference 0.000 Mb/s); 4096-QAM gain 1.200, 320 vs 160 MHz ratio 2.000, extrapolated 16-SS peak 46117.6 Mb/s | IEEE 802.11ax-2021 / 802.11be-2024 tables, 9607.8 / 23058.8 / 46117.6 Mb/s peak rates |
+| Single-user goodput (Wi-Fi 6/7) | Within 0.1-0.7% of the analytical bound for all 17 configurations, e.g. 549.5 Mb/s at HE MCS 11 / 80 MHz (bound 550.2), 2597.7 Mb/s at EHT MCS 13 / 320 MHz (bound 2599.7), 4900 Mb/s with 2 SS at 320 MHz (bound 4908); MAC efficiency 85-92% | AIFS + backoff + A-MPDU + SIFS + BlockAck model with the PPDU durations of the standard |
+| Aggregation | No aggregation 52.3 Mb/s (8.7% efficiency) to 549.5 Mb/s with the 256-MPDU window of 802.11ax and 655.9 Mb/s with the 1024-MPDU window of 802.11be, all within 1.5% of the bound | 802.11ax/be maximum A-MPDU and Block Ack window |
+| Receiver sensitivity | The table-based (LDPC) error model needs 3.8-5.3 dB less SNR than implied by the sensitivity table of the standard (which includes a 5 dB implementation margin); NIST is up to 2.7 dB more pessimistic | 802.11ax Table 27-51, NF 10 dB, 5 dB margin |
+| MLO throughput | 1, 2, 3 links: 546.7, 1095.0, 1352.0 Mb/s, i.e. 1.00x, 2.00x, 2.47x, within 0.6% of the sum of the link bounds | STR MLO capacity aggregation (Lopez-Raventos and Bellalta 2022) |
+| MLO latency | P95 latency 23.0 ms on a contended single link vs 0.48 ms with MLO (48x lower, equal to the idle link) | Carrascosa-Zamacois et al. 2023 |
+| EMLSR | Saturated DL 319 Mb/s (97% of a single-link device, 656 Mb/s for a dual-radio MLD); under contention on link 0 the P95 latency drops from 14.1 ms (SLD) to 0.58 ms (EMLSR) and 0.28 ms (MLD) | 802.11be Clause 35.3.17 |
+| TID-to-link mapping | Voice P95 latency 5.25 ms with the default mapping vs 0.073 ms with AC_VO on its own link, while best-effort traffic saturates the other link | 802.11be Clause 35.3.7 |
+| Dynamic bandwidth vs puncturing | With the secondary 40 MHz busy 50% of the time ns-3 falls back to 40 MHz PPDUs (177 of 354) and delivers 152.8 Mb/s vs an ideal dynamic-BW bound of 243.6 and a puncturing bound of 248.2 Mb/s | Deng et al. 2020 |
+| Power save | Average power 0.104 W vs 0.820 W in active mode (ratio 0.126, theoretical floor 0.121); P95 latency 95 ms, below the 102.4 ms beacon interval | Nurchis and Bellalta 2019 |
+| UHR KPI baseline (4 co-channel BSSs, 16 STAs, 20 Mb/s each) | Wi-Fi 6: 5th-percentile throughput 14.3 Mb/s, P95 latency 784 ms, 7.4% loss; Wi-Fi 7 MLO: 19.7 Mb/s, 9.5 ms, no loss; adding OBSS-PD spatial reuse raises the P95 latency to 38 ms in this geometry | P802.11bn PAR objectives (+25% 5th percentile, -25% P95) |
+| Roaming | Missed-beacon trigger: 8.1% DL loss and a 976 ms gap; ideal trigger: 0.02% loss and a 4 ms gap | P802.11bn mobility loss objective (-25%) |
+| MLO reliability | Deadline (10 ms) miss ratio 45.8% on a jammed single link, 18.7% with MLO (59% reduction), 0% on the clean link | Galati-Giordano et al. 2024 |
+| EDCA vs Bianchi | 5 to 50 saturated stations, 1 / 8 / 37 MPDUs per A-MPDU: within -5.4% to +6.4% of the Bianchi model (EIFS variant), e.g. 33.8 vs 33.0 Mb/s (5 STAs, no aggregation) and 46.3 vs 49.0 Mb/s (50 STAs, 37 MPDUs) | Bianchi 2000, ns-3 reference script |
+| Rate adaptation | Ideal matches the goodput expected from its selection rule within 0.3% at every distance (e.g. 440.8 vs 441.4 Mb/s at 10 m, 198.1 vs 198.1 Mb/s at 30 m) and reaches 67-100% of the genie bound; beyond 40 m the primary-20 MHz RSSI of the 80 MHz PPDU falls below the -82 dBm detection floor; MinstrelHt and ThompsonSampling are reported for information | Patidar et al. 2017 error model, genie bound |
+| DL OFDMA | Saturated: 4 users per MU PPDU on 52-tone RUs reach 90% of the per-RU PHY bound (63.5 of 70.6 Mb/s) vs 91.7% for SU (78.9 of 86.0 Mb/s); low load with 200-byte packets: OFDMA lowers the P95 latency of 8 stations from 1.14 ms to 0.63 ms (1.8x) | Khorov et al. 2019 |
+| UL OFDMA | 8 stations: EDCA 64.7 Mb/s (Bianchi 63.5), trigger-based access with MU EDCA 51.5 Mb/s with no contention PPDUs and identical per-station throughput (6.42-6.46 Mb/s) vs 2.6-12.6 Mb/s with EDCA; 4 stations per Basic Trigger Frame | Khorov et al. 2019 |
+| Spatial reuse | OBSS at -80.8 dBm, threshold -72/-77 dBm: CCA-busy fraction of the station drops from 46% to 1% and the aggregate throughput rises 1.77x; thresholds of -67/-62 dBm impose a 4/9 dB transmit power reduction and the gain falls to 1.47x/0.93x | Wilhelmi et al. 2021 |
+| Multi-AP coordination emulation | Two overlapping BSSs at 120 Mb/s offered: emulated Co-TDMA lowers the P95 latency by 11% (13.9 to 12.3 ms) at a 2% cost in 5th-percentile throughput; the OBSS-PD proxy of Co-SR gives no gain in this geometry; neither reaches the +25%/-25% UHR objectives | Nunez et al. 2022, P802.11bn PAR |
+
 ## Reference models
 
 `model/wifi-literature-reference.{h,cc}` contains the reference data and analytical models
