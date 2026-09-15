@@ -50,3 +50,6 @@ vcpkg/
 
 # Ignore local cache used by e.g. clangd
 .cache/
+
+# results of the wifi-benchmarks suite
+wifi-benchmarks-results/
