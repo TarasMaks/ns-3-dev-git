@@ -10,6 +10,7 @@
 #include "ns3/nstime.h"
 
 #include <cstdint>
+#include <ostream>
 #include <string>
 
 /**
@@ -89,6 +90,24 @@ const char* UwbRangingMethodName(UwbRangingMethod method);
 /// @param name "SS-TWR", "DS-TWR" or "TDOA"
 /// @return the ranging method
 UwbRangingMethod UwbRangingMethodFromString(const std::string& name);
+
+/// @ingroup uwb
+/// @param os the stream
+/// @param rate a data rate
+/// @return the stream
+std::ostream& operator<<(std::ostream& os, UwbDataRate rate);
+
+/// @ingroup uwb
+/// @param os the stream
+/// @param prf a mean pulse repetition frequency
+/// @return the stream
+std::ostream& operator<<(std::ostream& os, UwbPrf prf);
+
+/// @ingroup uwb
+/// @param os the stream
+/// @param method a ranging method
+/// @return the stream
+std::ostream& operator<<(std::ostream& os, UwbRangingMethod method);
 
 /// Chip rate of the HRP UWB physical layer, in Hz. Every UWB timing derives from it.
 constexpr double CHIP_RATE_HZ = 499.2e6;

@@ -54,6 +54,14 @@ const char* UwbPhyStateName(UwbPhyState state);
 
 /**
  * @ingroup uwb
+ * @param os the stream
+ * @param state a PHY state
+ * @return the stream
+ */
+std::ostream& operator<<(std::ostream& os, UwbPhyState state);
+
+/**
+ * @ingroup uwb
  * What a receiver learned about a frame it took in.
  */
 struct UwbRxInfo

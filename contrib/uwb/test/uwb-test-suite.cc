@@ -10,7 +10,10 @@
 #include "ns3/simulator.h"
 #include "ns3/spectrum-module.h"
 #include "ns3/test.h"
+#include "ns3/uwb-mac.h"
 #include "ns3/uwb-phy.h"
+#include "ns3/uwb-ranging.h"
+#include "ns3/uwb-tdoa-engine.h"
 #include "ns3/uwb-clock-model.h"
 #include "ns3/uwb-error-model.h"
 #include "ns3/uwb-spectrum-value-helper.h"
@@ -968,6 +971,558 @@ class UwbInterferenceTestCase : public TestCase
 /**
  * @ingroup uwb
  * @ingroup tests
+ * @brief Check the ranging estimators and the frames that carry their timestamps.
+ */
+class UwbRangingMathTestCase : public TestCase
+{
+  public:
+    UwbRangingMathTestCase()
+        : TestCase("Ranging estimators, message format and hyperbolic solver")
+    {
+    }
+
+  private:
+    /**
+     * Build the six timestamps an exchange would produce between two given crystals.
+     *
+     * @param distance the separation, in metres
+     * @param reply how long each side takes to turn a frame around
+     * @param initiatorPpm the frequency error of the initiator
+     * @param responderPpm the frequency error of the responder
+     * @return the timestamps, as each device would read its own counter
+     */
+    static UwbTwrTimestamps Synthesise(double distance,
+                                       Time reply,
+                                       double initiatorPpm,
+                                       double responderPpm)
+    {
+        auto initiator = CreateObject<UwbClockModel>();
+        auto responder = CreateObject<UwbClockModel>();
+        initiator->SetFrequencyOffsetPpm(initiatorPpm);
+        responder->SetFrequencyOffsetPpm(responderPpm);
+
+        // the instants in simulated time at which each marker is launched or arrives
+        const Time flight = DistanceToTimeOfFlight(distance);
+        const Time pollTx = MilliSeconds(100);
+        const Time pollRx = pollTx + flight;
+        const Time responseTx = pollRx + reply;
+        const Time responseRx = responseTx + flight;
+        const Time finalTx = responseRx + reply;
+        const Time finalRx = finalTx + flight;
+
+        UwbTwrTimestamps stamps;
+        stamps.pollTx = initiator->GetLocalTicks(pollTx);
+        stamps.pollRx = responder->GetLocalTicks(pollRx);
+        stamps.responseTx = responder->GetLocalTicks(responseTx);
+        stamps.responseRx = initiator->GetLocalTicks(responseRx);
+        stamps.finalTx = initiator->GetLocalTicks(finalTx);
+        stamps.finalRx = responder->GetLocalTicks(finalRx);
+        return stamps;
+    }
+
+    void DoRun() override
+    {
+        EnableUwbTimeResolution();
+
+        const double distance = 10.0;
+        const Time reply = MicroSeconds(300);
+
+        // with two perfect crystals both schemes are exact to the tick
+        auto stamps = Synthesise(distance, reply, 0.0, 0.0);
+        NS_TEST_EXPECT_MSG_EQ_TOL(SolveSsTwrRange(stamps),
+                                  distance,
+                                  0.01,
+                                  "A single sided exchange between perfect clocks is exact");
+        NS_TEST_EXPECT_MSG_EQ_TOL(SolveDsTwrRange(stamps),
+                                  distance,
+                                  0.01,
+                                  "A double sided exchange between perfect clocks is exact");
+
+        // with two ordinary crystals the single sided scheme is wrong by an amount that follows
+        // from the turnaround alone, and the double sided scheme is not
+        for (const double ppm : {5.0, 20.0, 40.0})
+        {
+            stamps = Synthesise(distance, reply, ppm / 2, -ppm / 2);
+            const double predicted = EstimateSsTwrClockErrorMetres(ppm, reply);
+            NS_TEST_EXPECT_MSG_EQ_TOL(SolveSsTwrRange(stamps) - distance,
+                                      predicted,
+                                      0.02,
+                                      "A single sided exchange is wrong by the predicted amount");
+            NS_TEST_EXPECT_MSG_EQ_TOL(SolveDsTwrRange(stamps),
+                                      distance,
+                                      0.01,
+                                      "A double sided exchange cancels the crystal error");
+        }
+
+        // the error of the single sided scheme grows with the turnaround and not with distance
+        const double nearError =
+            SolveSsTwrRange(Synthesise(1.0, reply, 10.0, -10.0)) - 1.0;
+        const double farError =
+            SolveSsTwrRange(Synthesise(100.0, reply, 10.0, -10.0)) - 100.0;
+        NS_TEST_EXPECT_MSG_EQ_TOL(nearError,
+                                  farError,
+                                  0.02,
+                                  "The single sided error does not depend on the distance");
+        const double longerError =
+            SolveSsTwrRange(Synthesise(distance, 2 * reply, 10.0, -10.0)) - distance;
+        NS_TEST_EXPECT_MSG_EQ_TOL(longerError,
+                                  2.0 * (SolveSsTwrRange(Synthesise(distance, reply, 10.0, -10.0)) -
+                                         distance),
+                                  0.02,
+                                  "Twice the turnaround is twice the error");
+
+        // the counter is forty bits wide and an exchange that straddles a wrap must still work
+        stamps = Synthesise(distance, reply, 0.0, 0.0);
+        const uint64_t shift = DTU_COUNTER_MODULUS - 1000;
+        UwbTwrTimestamps wrapped{(stamps.pollTx + shift) % DTU_COUNTER_MODULUS,
+                                 (stamps.pollRx + shift) % DTU_COUNTER_MODULUS,
+                                 (stamps.responseTx + shift) % DTU_COUNTER_MODULUS,
+                                 (stamps.responseRx + shift) % DTU_COUNTER_MODULUS,
+                                 (stamps.finalTx + shift) % DTU_COUNTER_MODULUS,
+                                 (stamps.finalRx + shift) % DTU_COUNTER_MODULUS};
+        NS_TEST_EXPECT_MSG_EQ_TOL(SolveDsTwrRange(wrapped),
+                                  distance,
+                                  0.01,
+                                  "An exchange across the counter wrap measures the same range");
+
+        // the ranging messages carry only what the other end needs, and carry it intact
+        UwbRangingHeader response;
+        response.SetMessage(UwbRangingMessage::RESPONSE);
+        response.SetSession(7);
+        response.SetMethod(UwbRangingMethod::DS_TWR);
+        response.SetResponderTimestamps(stamps.pollRx, stamps.responseTx);
+        auto packet = Create<Packet>();
+        packet->AddHeader(response);
+
+        UwbRangingHeader parsed;
+        packet->RemoveHeader(parsed);
+        NS_TEST_EXPECT_MSG_EQ(parsed.GetSession(), 7, "The exchange identifier survives the air");
+        NS_TEST_EXPECT_MSG_EQ(parsed.GetPollRx(),
+                              stamps.pollRx & (DTU_COUNTER_MODULUS - 1),
+                              "A forty bit timestamp survives the air");
+        NS_TEST_EXPECT_MSG_EQ(parsed.GetResponseTx(),
+                              stamps.responseTx & (DTU_COUNTER_MODULUS - 1),
+                              "And so does the second one");
+
+        UwbRangingHeader poll;
+        poll.SetMessage(UwbRangingMessage::POLL);
+        UwbRangingHeader final;
+        final.SetMessage(UwbRangingMessage::FINAL);
+        NS_TEST_EXPECT_MSG_LT(poll.GetSerializedSize(),
+                              response.GetSerializedSize(),
+                              "A poll carries no timestamps and is the shortest message");
+        NS_TEST_EXPECT_MSG_LT(response.GetSerializedSize(),
+                              final.GetSerializedSize(),
+                              "A final message carries three timestamps and is the longest");
+
+        // the MAC header and its frame check sequence survive a round trip too
+        UwbMacHeader mac;
+        mac.SetFrameType(UwbFrameType::COMMAND);
+        mac.SetSequenceNumber(42);
+        mac.SetPanId(0xBEEF);
+        mac.SetSource(Mac16Address("00:01"));
+        mac.SetDestination(Mac16Address("00:02"));
+        mac.SetAckRequest(true);
+        auto frame = Create<Packet>(20);
+        frame->AddHeader(mac);
+        UwbFcsTrailer fcs;
+        fcs.CalculateFcs(frame);
+        frame->AddTrailer(fcs);
+
+        UwbFcsTrailer readFcs;
+        frame->RemoveTrailer(readFcs);
+        NS_TEST_EXPECT_MSG_EQ(readFcs.CheckFcs(frame), true, "The frame check sequence agrees");
+        UwbMacHeader readMac;
+        frame->RemoveHeader(readMac);
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetSequenceNumber(), 42, "The sequence number survives");
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetPanId(), 0xBEEF, "The network identifier survives");
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetSource(), Mac16Address("00:01"), "The source survives");
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetDestination(),
+                              Mac16Address("00:02"),
+                              "The destination survives");
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetAckRequest(), true, "The acknowledgement request too");
+        NS_TEST_EXPECT_MSG_EQ(readMac.GetFrameType(),
+                              UwbFrameType::COMMAND,
+                              "And so does the frame type");
+
+        // a corrupted frame is caught
+        auto corrupted = Create<Packet>(20);
+        NS_TEST_EXPECT_MSG_EQ(readFcs.CheckFcs(corrupted),
+                              false,
+                              "A frame check sequence does not match a different frame");
+
+        // the hyperbolic solver finds a tag from exact arrival differences
+        const std::vector<Vector> anchors{Vector(0, 0, 0),
+                                          Vector(20, 0, 0),
+                                          Vector(20, 20, 0),
+                                          Vector(0, 20, 0)};
+        const Vector truth(7, 13, 0);
+        std::vector<double> offsets;
+        double reference = 0.0;
+        for (std::size_t i = 0; i < anchors.size(); ++i)
+        {
+            const double range = std::sqrt(std::pow(truth.x - anchors[i].x, 2) +
+                                           std::pow(truth.y - anchors[i].y, 2));
+            if (i == 0)
+            {
+                reference = range / SPEED_OF_LIGHT;
+            }
+            offsets.push_back(range / SPEED_OF_LIGHT - reference);
+        }
+
+        Vector estimate;
+        NS_TEST_ASSERT_MSG_EQ(SolveTdoa(anchors, offsets, false, estimate),
+                              true,
+                              "Four anchors fix a position in a plane");
+        NS_TEST_EXPECT_MSG_EQ_TOL(estimate.x, truth.x, 0.01, "The tag is found, in x");
+        NS_TEST_EXPECT_MSG_EQ_TOL(estimate.y, truth.y, 0.01, "The tag is found, in y");
+
+        // three anchors are one short, because the distance to the reference is an unknown too
+        const std::vector<Vector> three(anchors.begin(), anchors.begin() + 3);
+        const std::vector<double> threeOffsets(offsets.begin(), offsets.begin() + 3);
+        NS_TEST_EXPECT_MSG_EQ(SolveTdoa(three, threeOffsets, false, estimate),
+                              false,
+                              "Three anchors cannot fix a position by arrival differences");
+
+        // a nanosecond of disagreement between anchors is about a foot of position error
+        auto shifted = offsets;
+        shifted[1] += 1e-9;
+        NS_TEST_ASSERT_MSG_EQ(SolveTdoa(anchors, shifted, false, estimate),
+                              true,
+                              "A small synchronisation error still yields a position");
+        const double moved = std::sqrt(std::pow(estimate.x - truth.x, 2) +
+                                       std::pow(estimate.y - truth.y, 2));
+        NS_TEST_EXPECT_MSG_GT(moved, 0.05, "A nanosecond of sync error is not free");
+        NS_TEST_EXPECT_MSG_LT(moved, 3.0, "But one nanosecond is still only about a metre");
+    }
+};
+
+/**
+ * @ingroup uwb
+ * @ingroup tests
+ * @brief Run the two two-way schemes over the air between two devices with real crystals.
+ */
+class UwbTwoWayRangingTestCase : public TestCase
+{
+  public:
+    UwbTwoWayRangingTestCase()
+        : TestCase("Two-way ranging over the air, single sided against double sided")
+    {
+    }
+
+  private:
+    std::vector<double> m_ranges; //!< every range measured
+    uint32_t m_failed{0};         //!< exchanges that did not complete
+    Time m_replyDelay{Time(0)};   //!< the turnaround the responder used
+
+    /// @param result what an exchange produced
+    void OnResult(const UwbRangingResult& result)
+    {
+        if (!result.valid)
+        {
+            ++m_failed;
+            return;
+        }
+        if (!result.measuredHere)
+        {
+            return;
+        }
+        m_ranges.push_back(result.rangeMetres);
+        m_replyDelay = result.replyDelay;
+    }
+
+    /**
+     * Run a number of exchanges between two devices a fixed distance apart.
+     *
+     * @param distance the separation, in metres
+     * @param method the scheme to use
+     * @param initiatorPpm the frequency error of the initiator crystal
+     * @param responderPpm the frequency error of the responder crystal
+     * @param exchanges how many exchanges to run
+     */
+    void Run(double distance,
+             UwbRangingMethod method,
+             double initiatorPpm,
+             double responderPpm,
+             uint32_t exchanges)
+    {
+        m_ranges.clear();
+        m_failed = 0;
+
+        UwbPhyConfig config;
+        config.channel = 5;
+        config.dataRate = UwbDataRate::RATE_6M81;
+        config.prf = UwbPrf::PRF_64M;
+        config.preambleSymbols = 128;
+
+        auto channel = CreateObject<MultiModelSpectrumChannel>();
+        auto friis = CreateObject<FriisPropagationLossModel>();
+        friis->SetFrequency(ChannelToFrequencyMhz(config.channel) * 1e6);
+        channel->AddPropagationLossModel(friis);
+        channel->SetPropagationDelayModel(CreateObject<ConstantSpeedPropagationDelayModel>());
+
+        const double offsets[]{initiatorPpm, responderPpm};
+        const char* addresses[]{"00:01", "00:02"};
+        std::vector<Ptr<UwbMac>> macs;
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            auto mobility = CreateObject<ConstantPositionMobilityModel>();
+            mobility->SetPosition(Vector(i == 0 ? 0.0 : distance, 0, 0));
+
+            auto phy = CreateObject<UwbPhy>();
+            phy->SetConfig(config);
+            phy->SetTxPowerToRegulatoryLimit();
+            phy->SetChannel(channel);
+            phy->SetMobility(mobility);
+            phy->AssignStreams(1 + 10 * i);
+            channel->AddRx(phy);
+
+            auto clock = CreateObject<UwbClockModel>();
+            clock->SetFrequencyOffsetPpm(offsets[i]);
+            phy->SetClockModel(clock);
+
+            auto mac = CreateObject<UwbMac>();
+            mac->SetPhy(phy);
+            mac->SetAddress(Mac16Address(addresses[i]));
+            mac->SetPanId(1);
+            mac->AssignStreams(100 + 10 * i);
+            mac->SetRangingResultCallback(
+                MakeCallback(&UwbTwoWayRangingTestCase::OnResult, this));
+            macs.push_back(mac);
+        }
+
+        const Time spacing = MilliSeconds(20);
+        for (uint32_t i = 0; i < exchanges; ++i)
+        {
+            Simulator::Schedule(spacing * (i + 1), [macs, method]() {
+                macs[0]->StartRanging(Mac16Address("00:02"), method);
+            });
+        }
+        Simulator::Stop(spacing * (exchanges + 3));
+        Simulator::Run();
+        Simulator::Destroy();
+    }
+
+    /// @return the average of the ranges measured
+    double Mean() const
+    {
+        double mean = 0.0;
+        for (const double range : m_ranges)
+        {
+            mean += range / m_ranges.size();
+        }
+        return mean;
+    }
+
+    /// @return the standard deviation of the ranges measured
+    double StandardDeviation() const
+    {
+        const double mean = Mean();
+        double variance = 0.0;
+        for (const double range : m_ranges)
+        {
+            variance += (range - mean) * (range - mean) / m_ranges.size();
+        }
+        return std::sqrt(variance);
+    }
+
+    void DoRun() override
+    {
+        EnableUwbTimeResolution();
+
+        const double distance = 10.0;
+        const uint32_t exchanges = 60;
+
+        // two ordinary crystals, twenty parts per million apart in opposite directions, which
+        // is what IEEE Std 802.15.4 allows and what inexpensive parts deliver
+        Run(distance, UwbRangingMethod::SS_TWR, 20.0, -20.0, exchanges);
+        NS_TEST_ASSERT_MSG_EQ(m_ranges.size(), exchanges, "Every single sided exchange completed");
+        const double singleSidedBias = Mean() - distance;
+        const double singleSidedSigma = StandardDeviation();
+        const Time replyDelay = m_replyDelay;
+
+        // the bias is the one the estimator predicts from the turnaround, to within a
+        // centimetre, which is the model telling the same story twice by different routes
+        NS_TEST_EXPECT_MSG_EQ_TOL(singleSidedBias,
+                                  EstimateSsTwrClockErrorMetres(40.0, replyDelay),
+                                  0.02,
+                                  "The measured single sided bias is the predicted one");
+        NS_TEST_EXPECT_MSG_GT(singleSidedBias, 1.0, "Forty parts per million is metres of error");
+
+        // the same two devices, the same turnaround, one more frame
+        Run(distance, UwbRangingMethod::DS_TWR, 20.0, -20.0, exchanges);
+        NS_TEST_ASSERT_MSG_EQ(m_ranges.size(), exchanges, "Every double sided exchange completed");
+        const double doubleSidedBias = Mean() - distance;
+        const double doubleSidedSigma = StandardDeviation();
+
+        NS_TEST_EXPECT_MSG_LT(std::abs(doubleSidedBias),
+                              0.02,
+                              "A double sided exchange has no bias worth the name");
+        NS_TEST_EXPECT_MSG_GT(std::abs(singleSidedBias / doubleSidedBias),
+                              100.0,
+                              "The third frame buys at least two orders of magnitude");
+
+        // what is left once the crystals are out of the way is the leading edge estimate, and
+        // it is the centimetre UWB is sold on, in both schemes
+        NS_TEST_EXPECT_MSG_LT(doubleSidedSigma, 0.05, "The spread is a couple of centimetres");
+        NS_TEST_EXPECT_MSG_LT(singleSidedSigma, 0.05, "In both schemes, since it is the same radio");
+
+        // with two perfect crystals the single sided scheme is as good as the double sided one,
+        // which shows that the bias above is the clocks and nothing else
+        Run(distance, UwbRangingMethod::SS_TWR, 0.0, 0.0, exchanges);
+        NS_TEST_EXPECT_MSG_LT(std::abs(Mean() - distance),
+                              0.02,
+                              "Between perfect clocks a single sided exchange is unbiased");
+    }
+};
+
+/**
+ * @ingroup uwb
+ * @ingroup tests
+ * @brief Locate a tag from the differences between the times its blink reached four anchors.
+ */
+class UwbTdoaTestCase : public TestCase
+{
+  public:
+    UwbTdoaTestCase()
+        : TestCase("Time difference of arrival and the cost of anchor synchronisation")
+    {
+    }
+
+  private:
+    std::vector<Vector> m_fixes; //!< every position found
+    uint32_t m_failed{0};        //!< blinks that could not be solved
+
+    /// @param tag who was located
+    /// @param position where they were found
+    /// @param solved whether the geometry closed
+    void OnPosition(Mac16Address tag, Vector position, bool solved)
+    {
+        if (!solved)
+        {
+            ++m_failed;
+            return;
+        }
+        m_fixes.push_back(position);
+    }
+
+    /**
+     * Send a number of blinks from a tag inside a square of four anchors.
+     *
+     * @param syncError the standard deviation of the residual anchor clock offsets
+     * @param blinks how many blinks the tag sends
+     * @param truth where the tag actually is
+     */
+    void Run(Time syncError, uint32_t blinks, Vector truth)
+    {
+        m_fixes.clear();
+        m_failed = 0;
+
+        UwbPhyConfig config;
+        config.channel = 5;
+        config.dataRate = UwbDataRate::RATE_6M81;
+        config.prf = UwbPrf::PRF_64M;
+        config.preambleSymbols = 128;
+
+        auto channel = CreateObject<MultiModelSpectrumChannel>();
+        auto friis = CreateObject<FriisPropagationLossModel>();
+        friis->SetFrequency(ChannelToFrequencyMhz(config.channel) * 1e6);
+        channel->AddPropagationLossModel(friis);
+        channel->SetPropagationDelayModel(CreateObject<ConstantSpeedPropagationDelayModel>());
+
+        auto engine = CreateObject<UwbTdoaEngine>();
+        engine->SetAttribute("SyncError", TimeValue(syncError));
+        engine->AssignStreams(500);
+        engine->SetPositionCallback(MakeCallback(&UwbTdoaTestCase::OnPosition, this));
+
+        auto build = [&](Vector position, const char* address, double ppm, int64_t stream) {
+            auto mobility = CreateObject<ConstantPositionMobilityModel>();
+            mobility->SetPosition(position);
+            auto phy = CreateObject<UwbPhy>();
+            phy->SetConfig(config);
+            phy->SetTxPowerToRegulatoryLimit();
+            phy->SetChannel(channel);
+            phy->SetMobility(mobility);
+            phy->AssignStreams(stream);
+            channel->AddRx(phy);
+            auto clock = CreateObject<UwbClockModel>();
+            clock->SetFrequencyOffsetPpm(ppm);
+            phy->SetClockModel(clock);
+            auto mac = CreateObject<UwbMac>();
+            mac->SetPhy(phy);
+            mac->SetAddress(Mac16Address(address));
+            mac->SetPanId(1);
+            mac->AssignStreams(stream + 5);
+            return mac;
+        };
+
+        const std::vector<Vector> anchors{Vector(0, 0, 0),
+                                          Vector(20, 0, 0),
+                                          Vector(20, 20, 0),
+                                          Vector(0, 20, 0)};
+        const char* addresses[]{"00:11", "00:12", "00:13", "00:14"};
+        for (std::size_t i = 0; i < anchors.size(); ++i)
+        {
+            // every anchor carries a different crystal, which perfect synchronisation removes
+            const double ppm = 20.0 * (static_cast<double>(i) / (anchors.size() - 1) - 0.5) * 2;
+            engine->AddAnchor(build(anchors[i], addresses[i], ppm, 10 * (i + 1)), anchors[i]);
+        }
+        auto tag = build(truth, "00:99", 0.0, 900);
+
+        const Time spacing = MilliSeconds(50);
+        for (uint32_t i = 0; i < blinks; ++i)
+        {
+            Simulator::Schedule(spacing * (i + 1), [tag]() { tag->SendBlink(); });
+        }
+        Simulator::Stop(spacing * (blinks + 3));
+        Simulator::Run();
+        Simulator::Destroy();
+    }
+
+    /// @param truth where the tag actually is
+    /// @return the root mean square horizontal error of the fixes
+    double RmsError(Vector truth) const
+    {
+        double sum = 0.0;
+        for (const auto& fix : m_fixes)
+        {
+            sum += (std::pow(fix.x - truth.x, 2) + std::pow(fix.y - truth.y, 2)) / m_fixes.size();
+        }
+        return std::sqrt(sum);
+    }
+
+    void DoRun() override
+    {
+        EnableUwbTimeResolution();
+
+        const Vector truth(7, 13, 0);
+        const uint32_t blinks = 40;
+
+        // a tag that says nothing but its own name, and four anchors that agree on time
+        Run(Time(0), blinks, truth);
+        NS_TEST_ASSERT_MSG_EQ(m_fixes.size(), blinks, "Every blink was located");
+        const double synchronised = RmsError(truth);
+        NS_TEST_EXPECT_MSG_LT(synchronised,
+                              0.60,
+                              "Four synchronised anchors place a tag inside a metre");
+        NS_TEST_EXPECT_MSG_GT(synchronised,
+                              0.005,
+                              "But not perfectly, because the timestamps are estimates");
+
+        // a nanosecond of residual disagreement is thirty centimetres of range on every
+        // baseline, and the geometry turns that into rather more
+        Run(NanoSeconds(1), blinks, truth);
+        NS_TEST_ASSERT_MSG_GT(m_fixes.size(), 0u, "Some blinks are still located");
+        const double drifted = RmsError(truth);
+        NS_TEST_EXPECT_MSG_GT(drifted,
+                              4.0 * synchronised,
+                              "Losing a nanosecond of synchronisation is expensive");
+    }
+};
+
+/**
+ * @ingroup uwb
+ * @ingroup tests
  * @brief Test suite of the UWB model.
  */
 class UwbTestSuite : public TestSuite
@@ -984,6 +1539,9 @@ class UwbTestSuite : public TestSuite
         AddTestCase(new UwbPhyLinkTestCase, Duration::QUICK);
         AddTestCase(new UwbTimestampTestCase, Duration::QUICK);
         AddTestCase(new UwbInterferenceTestCase, Duration::QUICK);
+        AddTestCase(new UwbRangingMathTestCase, Duration::QUICK);
+        AddTestCase(new UwbTwoWayRangingTestCase, Duration::QUICK);
+        AddTestCase(new UwbTdoaTestCase, Duration::QUICK);
     }
 };
 

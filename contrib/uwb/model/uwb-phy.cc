@@ -48,6 +48,12 @@ UwbPhyStateName(UwbPhyState state)
     }
 }
 
+std::ostream&
+operator<<(std::ostream& os, UwbPhyState state)
+{
+    return os << UwbPhyStateName(state);
+}
+
 NS_OBJECT_ENSURE_REGISTERED(UwbPhy);
 
 TypeId

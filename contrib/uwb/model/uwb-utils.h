@@ -197,6 +197,23 @@ bool Trilaterate(const std::vector<Vector>& anchors,
                  bool solveHeight,
                  Vector& position);
 
+/**
+ * @ingroup uwb
+ * Solve an overdetermined linear system in the least squares sense, through its normal
+ * equations and Gauss-Jordan elimination with partial pivoting.
+ *
+ * Both position solvers of this module end in a system of this shape, one from circles and one
+ * from hyperbolas, so the arithmetic lives here once.
+ *
+ * @param a the matrix, with one row per equation
+ * @param b the right hand side, one entry per row
+ * @param x filled with the solution
+ * @return true if the system had a solution, false if it was singular or underdetermined
+ */
+bool SolveLeastSquares(const std::vector<std::vector<double>>& a,
+                       const std::vector<double>& b,
+                       std::vector<double>& x);
+
 } // namespace uwb
 } // namespace ns3
 

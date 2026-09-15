@@ -8,6 +8,7 @@
 
 #include "ns3/abort.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <sstream>
@@ -101,6 +102,24 @@ const char*
 UwbPrfName(UwbPrf prf)
 {
     return (prf == UwbPrf::PRF_16M) ? "PRF16" : "PRF64";
+}
+
+std::ostream&
+operator<<(std::ostream& os, UwbDataRate rate)
+{
+    return os << UwbDataRateName(rate);
+}
+
+std::ostream&
+operator<<(std::ostream& os, UwbPrf prf)
+{
+    return os << UwbPrfName(prf);
+}
+
+std::ostream&
+operator<<(std::ostream& os, UwbRangingMethod method)
+{
+    return os << UwbRangingMethodName(method);
 }
 
 namespace
@@ -378,7 +397,36 @@ Trilaterate(const std::vector<Vector>& anchors,
         }
     }
 
-    // normal equations: (A^T A) x = A^T b
+    std::vector<double> solution;
+    if (!SolveLeastSquares(a, b, solution))
+    {
+        // the anchors are collinear, or coplanar when height is being solved for
+        return false;
+    }
+
+    position.x = solution[0];
+    position.y = solution[1];
+    position.z = solveHeight ? solution[2] : reference.z;
+    return true;
+}
+
+bool
+SolveLeastSquares(const std::vector<std::vector<double>>& a,
+                  const std::vector<double>& b,
+                  std::vector<double>& x)
+{
+    const std::size_t rows = a.size();
+    if (rows == 0 || rows != b.size())
+    {
+        return false;
+    }
+    const std::size_t unknowns = a[0].size();
+    if (unknowns == 0 || rows < unknowns)
+    {
+        return false;
+    }
+
+    // normal equations: (A^T A) x = A^T b, held as an augmented matrix
     std::vector<std::vector<double>> normal(unknowns, std::vector<double>(unknowns + 1, 0.0));
     for (std::size_t r = 0; r < unknowns; ++r)
     {
@@ -399,7 +447,22 @@ Trilaterate(const std::vector<Vector>& anchors,
         normal[r][unknowns] = sum;
     }
 
-    // Gaussian elimination with partial pivoting
+    // the scale of the normal equations is the square of the scale of the geometry, so the
+    // pivot is judged against the largest entry rather than against an absolute floor
+    double largest = 0.0;
+    for (const auto& row : normal)
+    {
+        for (std::size_t c = 0; c < unknowns; ++c)
+        {
+            largest = std::max(largest, std::abs(row[c]));
+        }
+    }
+    if (largest <= 0.0)
+    {
+        return false;
+    }
+
+    // Gauss-Jordan elimination with partial pivoting
     for (std::size_t column = 0; column < unknowns; ++column)
     {
         std::size_t pivot = column;
@@ -410,9 +473,8 @@ Trilaterate(const std::vector<Vector>& anchors,
                 pivot = row;
             }
         }
-        if (std::abs(normal[pivot][column]) < 1e-12)
+        if (std::abs(normal[pivot][column]) < 1e-9 * largest)
         {
-            // the anchors are collinear, or coplanar when height is being solved for
             return false;
         }
         std::swap(normal[column], normal[pivot]);
@@ -430,9 +492,11 @@ Trilaterate(const std::vector<Vector>& anchors,
         }
     }
 
-    position.x = normal[0][unknowns] / normal[0][0];
-    position.y = normal[1][unknowns] / normal[1][1];
-    position.z = solveHeight ? normal[2][unknowns] / normal[2][2] : reference.z;
+    x.resize(unknowns);
+    for (std::size_t i = 0; i < unknowns; ++i)
+    {
+        x[i] = normal[i][unknowns] / normal[i][i];
+    }
     return true;
 }
 
