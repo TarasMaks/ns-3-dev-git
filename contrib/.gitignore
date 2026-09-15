@@ -7,3 +7,7 @@
 # tracked contrib module: Wi-Fi 6/7/8 benchmark suite
 !wifi-benchmarks/
 !wifi-benchmarks/**
+
+# tracked contrib module: Bluetooth Low Energy model
+!ble/
+!ble/**

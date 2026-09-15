@@ -1,0 +1,36 @@
+build_lib(
+  LIBNAME ble
+  SOURCE_FILES
+    model/ble-utils.cc
+    model/ble-headers.cc
+    model/ble-spectrum-value-helper.cc
+    model/ble-spectrum-signal-parameters.cc
+    model/ble-error-model.cc
+    model/ble-interference-helper.cc
+    model/ble-phy.cc
+    model/ble-link-layer.cc
+    model/ble-net-device.cc
+    helper/ble-helper.cc
+  HEADER_FILES
+    model/ble-constants.h
+    model/ble-utils.h
+    model/ble-headers.h
+    model/ble-spectrum-value-helper.h
+    model/ble-spectrum-signal-parameters.h
+    model/ble-error-model.h
+    model/ble-interference-helper.h
+    model/ble-phy.h
+    model/ble-link-layer.h
+    model/ble-net-device.h
+    helper/ble-helper.h
+  LIBRARIES_TO_LINK
+    ${libcore}
+    ${libnetwork}
+    ${libmobility}
+    ${libspectrum}
+    ${libpropagation}
+    ${libenergy}
+  TEST_SOURCES
+    test/ble-test-suite.cc
+    test/ble-connection-test-suite.cc
+)
