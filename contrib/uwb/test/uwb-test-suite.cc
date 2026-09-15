@@ -574,6 +574,46 @@ class UwbClockTestCase : public TestCase
                                   0.05,
                                   "The counter wraps every 17.2 seconds");
 
+        // A reading of the counter names one instant in every 17.2 seconds, so comparing
+        // readings from two devices, which is what a time difference of arrival engine does,
+        // means resolving the wrap first. Two anchors whose crystals are forty parts per
+        // million apart cross a wrap about seven tenths of a millisecond apart, and a system
+        // that ignored that would have them disagreeing by two hundred kilometres of range.
+        for (const auto& at : {MilliSeconds(1), Seconds(5), Seconds(17), Seconds(25), Seconds(60)})
+        {
+            for (const auto& clock : {perfect, fast, slow})
+            {
+                const uint64_t ticks = clock->GetLocalTicks(at);
+                const Time resolved = clock->ResolveTimestamp(ticks, at);
+                NS_TEST_EXPECT_MSG_LT(std::abs((resolved - at).GetSeconds()),
+                                      2 * TIMESTAMP_RESOLUTION_S,
+                                      "A counter reading resolves back to the instant it was "
+                                      "taken at, whatever the crystal and however many wraps "
+                                      "have gone by");
+            }
+        }
+
+        // the resolution has to survive the reference being a little off, as it always is: the
+        // engine resolves against the moment it is processing the report, not the arrival
+        {
+            const Time at = Seconds(20);
+            const uint64_t ticks = fast->GetLocalTicks(at);
+            const Time resolved = fast->ResolveTimestamp(ticks, at + MilliSeconds(3));
+            NS_TEST_EXPECT_MSG_LT(std::abs((resolved - at).GetSeconds()),
+                                  2 * TIMESTAMP_RESOLUTION_S,
+                                  "A reference a few milliseconds late still picks the right wrap");
+        }
+
+        // two anchors either side of a wrap must still agree about when a signal reached them
+        {
+            const Time arrival = Seconds(17.18);
+            const Time fastSaw = fast->ResolveTimestamp(fast->GetLocalTicks(arrival), arrival);
+            const Time slowSaw = slow->ResolveTimestamp(slow->GetLocalTicks(arrival), arrival);
+            NS_TEST_EXPECT_MSG_LT(std::abs((fastSaw - slowSaw).GetSeconds()),
+                                  1e-9,
+                                  "Two anchors on either side of a counter wrap still agree");
+        }
+
         // a drifting crystal is slower than its nominal rate to begin with and faster later
         auto drifting = CreateObject<UwbClockModel>();
         drifting->SetFrequencyOffsetPpm(0.0);

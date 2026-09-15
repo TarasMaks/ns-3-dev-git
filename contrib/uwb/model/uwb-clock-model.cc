@@ -155,6 +155,30 @@ UwbClockModel::GetLocalTicks(Time global) const
     return (TimeToTicks(GetLocalTime(global)) + m_initialTicks) & COUNTER_MASK;
 }
 
+Time
+UwbClockModel::ResolveTimestamp(uint64_t ticks, Time reference) const
+{
+    const uint64_t expected = TimeToTicks(GetLocalTime(reference)) + m_initialTicks;
+    const auto modulus = static_cast<int64_t>(DTU_COUNTER_MODULUS);
+    const auto epoch = static_cast<int64_t>(expected / DTU_COUNTER_MODULUS);
+
+    int64_t full = epoch * modulus + static_cast<int64_t>(ticks & COUNTER_MASK);
+    if (full - static_cast<int64_t>(expected) > modulus / 2)
+    {
+        full -= modulus;
+    }
+    else if (static_cast<int64_t>(expected) - full > modulus / 2)
+    {
+        full += modulus;
+    }
+
+    if (full <= static_cast<int64_t>(m_initialTicks))
+    {
+        return Time(0);
+    }
+    return LocalToGlobal(TicksToTime(static_cast<uint64_t>(full) - m_initialTicks));
+}
+
 uint64_t
 UwbClockModel::GetLocalTicksNow() const
 {

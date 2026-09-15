@@ -81,6 +81,26 @@ class UwbClockModel : public Object
     Time LocalToGlobal(Time local) const;
 
     /**
+     * Resolve a counter reading to the instant of simulated time it stands for.
+     *
+     * A forty bit reading names one instant in every 17.2 seconds, so on its own it is
+     * ambiguous. Given an instant the reading is known to be near, within half a wrap, this
+     * picks out which one it is and undoes the frequency error of the crystal, so that readings
+     * taken by different devices can be compared. Firmware does the same thing by keeping count
+     * of the wraps it has seen.
+     *
+     * Two-way ranging does not need this, because it only ever subtracts two readings that are
+     * microseconds apart and TicksDifference handles that on its own. Anything that compares
+     * readings from different devices, such as a time difference of arrival engine, does.
+     *
+     * @param ticks the counter reading
+     * @param reference an instant of simulated time known to be within half a wrap of the right
+     *                  answer, which in practice is simply now
+     * @return the instant of simulated time
+     */
+    Time ResolveTimestamp(uint64_t ticks, Time reference) const;
+
+    /**
      * The difference between two counter readings, taken the way ranging firmware has to take
      * it, so that a wrap of the 40-bit counter between them does not corrupt the result.
      *

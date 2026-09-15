@@ -104,6 +104,9 @@ class UwbTdoaEngine : public Object
     /// A blink is identified by who sent it and what they numbered it.
     using BlinkKey = std::pair<Mac16Address, uint8_t>;
 
+    /// Draw the residual clock offset of every anchor, once, on first use.
+    void DrawSyncOffsets();
+
     /**
      * An anchor heard a blink.
      *
@@ -126,6 +129,7 @@ class UwbTdoaEngine : public Object
     Time m_collectionWindow;                   //!< how long to wait for the anchors to report
     Time m_syncError;                          //!< the residual disagreement between anchors
     bool m_solveHeight;                        //!< whether height is estimated
+    bool m_offsetsDrawn{false};                //!< whether the anchor offsets have been drawn
 
     PositionCallback m_positionCallback;   //!< invoked once a tag has been located
     Ptr<NormalRandomVariable> m_syncNoise; //!< draws the residual offset of each anchor

@@ -98,7 +98,6 @@ UwbTdoaEngine::AddAnchor(Ptr<UwbMac> anchor, Vector position)
     Anchor entry;
     entry.mac = anchor;
     entry.position = position;
-    entry.syncOffset = Seconds(m_syncError.GetSeconds() * m_syncNoise->GetValue());
     m_anchors.push_back(entry);
 
     anchor->SetBlinkCallback(
@@ -131,19 +130,42 @@ UwbTdoaEngine::AssignStreams(int64_t stream)
 }
 
 void
+UwbTdoaEngine::DrawSyncOffsets()
+{
+    // the offsets are drawn on first use rather than when an anchor is added, so that a script
+    // may set SyncError and assign random streams in whatever order it likes
+    if (m_offsetsDrawn)
+    {
+        return;
+    }
+    m_offsetsDrawn = true;
+    for (auto& anchor : m_anchors)
+    {
+        anchor.syncOffset = Seconds(m_syncError.GetSeconds() * m_syncNoise->GetValue());
+    }
+    NS_LOG_INFO("Drew the residual clock offsets of " << m_anchors.size() << " anchors");
+}
+
+void
 UwbTdoaEngine::OnBlink(std::size_t index, Mac16Address tag, uint8_t session, const UwbRxInfo& info)
 {
     NS_LOG_FUNCTION(this << index << tag << +session);
     NS_ASSERT_MSG(index < m_anchors.size(), "A report came from an anchor that is not registered");
+    DrawSyncOffsets();
     const auto& anchor = m_anchors[index];
 
     // the anchor read its own counter, so the reading has to be brought back onto the common
     // time base the engine works in, and then displaced by whatever its synchronisation is out
     // by. With no synchronisation error the conversion is exact, which is the ideal a wired
-    // installation is trying to approach
+    // installation is trying to approach.
+    //
+    // The reading is only forty bits wide and wraps every 17.2 seconds, and each anchor wraps
+    // at a slightly different moment because each crystal runs at a slightly different rate.
+    // Ignoring that would leave the anchors disagreeing by a millisecond, so the reading is
+    // resolved against the present instant, which is what firmware does by counting wraps.
     auto clock = anchor.mac->GetPhy()->GetClockModel();
-    const Time local = UwbClockModel::TicksToTime(info.rxTimestamp);
-    const Time arrival = clock->LocalToGlobal(local) + anchor.syncOffset;
+    const Time arrival = clock->ResolveTimestamp(info.rxTimestamp, Simulator::Now()) +
+                         anchor.syncOffset;
 
     const BlinkKey key{tag, session};
     auto& collection = m_pending[key];
@@ -166,6 +188,9 @@ UwbTdoaEngine::Solve(BlinkKey key)
     }
     const auto arrivals = entry->second.arrivals;
     m_pending.erase(entry);
+
+    NS_LOG_INFO(arrivals.size() << " of " << m_anchors.size() << " anchors heard the blink "
+                                << +key.second << " from " << key.first);
 
     std::vector<Vector> anchors;
     std::vector<double> offsets;
