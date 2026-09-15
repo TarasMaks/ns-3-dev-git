@@ -1,0 +1,28 @@
+build_lib(
+  LIBNAME uwb
+  SOURCE_FILES
+    model/uwb-clock-model.cc
+    model/uwb-error-model.cc
+    model/uwb-phy.cc
+    model/uwb-interference-helper.cc
+    model/uwb-spectrum-signal-parameters.cc
+    model/uwb-spectrum-value-helper.cc
+    model/uwb-utils.cc
+  HEADER_FILES
+    model/uwb-constants.h
+    model/uwb-clock-model.h
+    model/uwb-error-model.h
+    model/uwb-phy.h
+    model/uwb-interference-helper.h
+    model/uwb-spectrum-signal-parameters.h
+    model/uwb-spectrum-value-helper.h
+    model/uwb-utils.h
+  LIBRARIES_TO_LINK
+    ${libcore}
+    ${libnetwork}
+    ${libmobility}
+    ${libspectrum}
+    ${libpropagation}
+  TEST_SOURCES
+    test/uwb-test-suite.cc
+)

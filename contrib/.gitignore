@@ -11,3 +11,7 @@
 # tracked contrib module: Bluetooth Low Energy model
 !ble/
 !ble/**
+
+# tracked contrib module: Ultra-Wideband model
+!uwb/
+!uwb/**
